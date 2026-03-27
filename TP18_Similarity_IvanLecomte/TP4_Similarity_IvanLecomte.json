@@ -1,0 +1,215 @@
+{
+  "name": "MA-CPL1_TP4_Simi_IvanLecomte",
+  "nodes": [
+    {  
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {},
+        "options": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 1,
+      "position": [
+        -448,
+        208
+      ],
+      "id": "264d23a0-9dd9-4b81-abb1-1490128b0f8a",
+      "name": "Microsoft Outlook Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n const subject = item.json.subject || \"\";\n const body = item.json.body || \"\";\n return {\n json: {\n ...item.json,\n text_for_embedding: `search_query: Objet:\n${subject}\\nMessage:\\n${body}`\n }\n };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        208
+      ],
+      "id": "f2e49035-dae7-464a-b3b5-f3630d665e43",
+      "name": "text_for_embedding"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -16,
+        288
+      ],
+      "id": "5c5b17d0-416f-4212-a681-44fbc3ff084c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://gpu.cpnv.me:11434/api/embeddings",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "nomic-embed-text-v2-moe"
+            },
+            {
+              "name": "prompt",
+              "value": "={{$json.text_for_embedding}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "2454b803-1cd1-4baa-b833-4981d445090f",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "fileSelector": "/data/embeddingsJudahPeriyasamy.json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        144
+      ],
+      "id": "7b1b315a-5042-4bd6-8af3-e8ab54043ca9",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        144
+      ],
+      "id": "6d15e244-32d8-4c86-a4c2-c8045a4db583",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.all();\n \nlet emails = [];\n \nraw.forEach(item => {\n  const dataArray = item.json.data || [];\n \n  dataArray.forEach(d => {\n    if (d.line) {\n      try {\n        const parsed = JSON.parse(d.line);\n \n        emails.push({\n          subject: parsed.subject || \"\",\n          body_text: parsed.body_text || \"\"\n        });\n \n      } catch (e) {}\n    }\n  });\n});\n \nif (emails.length < 2) {\n  return [\n    {\n      json: {\n        message: \"Pas assez d'emails pour calculer une similarité\",\n        count: emails.length\n      }\n    }\n  ];\n}\n \nfunction tokenize(text) {\n  if (!text) return [];\n \n  return text\n    .toLowerCase()\n    .replace(/[^\\w\\s]/g, \"\")\n    .split(/\\s+/)\n    .filter(Boolean);\n}\n \nfunction buildVocabulary(docs) {\n  const vocab = new Set();\n \n  docs.forEach(doc => {\n    tokenize(doc).forEach(word => vocab.add(word));\n  });\n \n  return Array.from(vocab);\n}\n \nfunction textToVector(text, vocab) {\n  const words = tokenize(text);\n \n  const freq = {};\n  words.forEach(w => {\n    freq[w] = (freq[w] || 0) + 1;\n  });\n \n  return vocab.map(word => freq[word] || 0);\n}\n \nfunction dot(a, b) {\n  return a.reduce((sum, v, i) => sum + v * b[i], 0);\n}\n \nfunction magnitude(v) {\n  return Math.sqrt(v.reduce((s, x) => s + x * x, 0));\n}\n \nfunction cosine(a, b) {\n  const denom = magnitude(a) * magnitude(b);\n  if (!denom) return 0;\n  return dot(a, b) / denom;\n}\n \nconst vocab = buildVocabulary(emails.map(e => e.body_text));\n \nconst vectors = emails.map(e => textToVector(e.body_text, vocab));\n \nconst avgVector = [];\n \nfor (let i = 0; i < vocab.length; i++) {\n  let sum = 0;\n \n  for (let j = 0; j < vectors.length; j++) {\n    sum += vectors[j][i];\n  }\n \n  avgVector.push(sum / vectors.length);\n}\n \nconst results = emails.map((email, i) => {\n  const vec = vectors[i];\n  const similarity = cosine(vec, avgVector);\n \n  return {\n    json: {\n      subject: email.subject,\n      body_text: email.body_text,\n      similarity: Number(similarity.toFixed(2))\n    }\n  };\n});\n \nresults.sort((a, b) => b.json.similarity - a.json.similarity);\n \nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        368
+      ],
+      "id": "c85c48b0-c081-4ac2-9187-34abb53be2f0",
+      "name": "Code in JavaScript",
+      "alwaysOutputData": false
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Microsoft Outlook Trigger": {
+      "main": [
+        [
+          {
+            "node": "text_for_embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "text_for_embedding": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "b039493e-a0c2-49f8-af13-b218d2eb0efb",
+  "meta": {
+    "instanceId": "9d30d1f1874df20c0dc0c5e334ba45c46152a3794403b022f504026a467e081f"
+  },
+  "id": "QudyeAeBzN4ABvVArDnNs",
+  "tags": []
+}
